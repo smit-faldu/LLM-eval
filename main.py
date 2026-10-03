@@ -23,8 +23,9 @@ def main():
             continue
         for event in run_turn(graph, text, thread_id):
             match event["type"]:
-                case "route":
-                    print(f"  [supervisor] -> {event['next']}")
+                case "plan":
+                    for task in event["tasks"]:
+                        print(f"  [plan] {task['agent']}: {task['request']}")
                 case "tool_call":
                     print(f"  [{event['agent']}] tool {event['name']}({event['args']})")
                 case "message":

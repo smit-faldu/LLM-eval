@@ -1,4 +1,5 @@
-"""Supervisor multi-agent graph: a LangGraph router dispatching to LangChain tool-calling specialists."""
+"""Supervisor multi-agent graph: a planner splits each user message into per-specialist sub-tasks,
+then LangGraph runs the LangChain tool-calling specialists one after another."""
 import os
 from typing import Annotated, Literal, TypedDict
 
@@ -12,47 +13,69 @@ from pydantic import BaseModel, Field
 
 from shop.tools import ORDER_TOOLS, POLICY_TOOLS, PRODUCT_TOOLS
 
-MAX_HOPS = 4
+MAX_TASKS = 4
 AGENTS = ("order_agent", "product_agent", "policy_agent")
 
 SPECIALISTS = {
     "order_agent": (ORDER_TOOLS, (
         "You are the order and account specialist for an electronics shop. You look up orders and customer"
         " profiles, cancel pending orders, issue refunds, and open or list support tickets using your tools. Never invent order data. Only say an action succeeded if the tool says so;"
-        " if a tool refuses, explain why. Answer only the order-related part of the request."
+        " if a tool refuses, explain why. Never answer policy or product questions from memory; only report what your tools return."
     )),
     "product_agent": (PRODUCT_TOOLS, (
         "You are the product specialist for an electronics shop. Use your tools to search the catalog, check"
-        " stock and read reviews. Never invent products, prices, stock levels or ratings. Answer only the product-related part of the request."
+        " stock and read reviews. Never invent products, prices, stock levels or ratings. Never answer order or policy questions from memory; only report what your tools return."
     )),
     "policy_agent": (POLICY_TOOLS, (
         "You are the policy specialist for an electronics shop. Always call search_policy and answer only from the"
-        " returned text. If the policy does not cover the question, say so. Answer only the policy part of the request."
+        " returned text. If the policy does not cover the question, say so."
     )),
 }
 
-SUPERVISOR_PROMPT = """You route customer messages for an electronics shop to specialists:
+SUPERVISOR_PROMPT = """You plan how to answer a customer of an electronics shop. Split the latest user message
+into sub-tasks and assign each to exactly one specialist:
 - order_agent: a specific order or customer account: order status, order history, cancellations, refunds,
   customer profile/tier, opening or checking support tickets (warranty, damaged, shipping, billing).
 - product_agent: product search, prices, brands, stock availability, warranty length, reviews and ratings.
 - policy_agent: general rules: returns, refunds, exchanges, cancellation, shipping, late/damaged deliveries,
   warranty terms, membership tiers, price match, payment, privacy.
 
-Look at the conversation since the latest user message. Pick the specialist for the next part of the request
-that has NOT been answered yet. A request can need several specialists in turn.
-Choose FINISH when every part is answered. If you FINISH and no specialist answered the latest user message
-(greeting, off-topic), put a short reply in `reply`; otherwise leave `reply` empty."""
+Rules:
+- One sub-task per distinct question or action. A message with two questions for two specialists gives two tasks.
+- Each `request` must be self-contained: copy order IDs, product IDs, emails and names into it, and resolve
+  words like "it" or "that order" using the conversation.
+- Order the tasks so that a task needing another's result comes after it.
+- If no specialist is needed (greeting, thanks, off-topic), return no tasks and put a short reply in `reply`.
+
+Examples:
+"Cancel order 1005 and tell me the refund policy" ->
+  [order_agent: "Cancel order 1005."], [policy_agent: "What is the refund policy?"]
+"Is the smartwatch ultra in stock and how long is shipping?" ->
+  [product_agent: "Is the Smartwatch Ultra in stock?"], [policy_agent: "How long does shipping take?"]
+"Where is order 1003?" -> [order_agent: "Where is order 1003? Give status and tracking."]
+"Thanks!" -> no tasks, reply: "You're welcome! Anything else?"
+"""
 
 
-class Route(BaseModel):
-    next: Literal["order_agent", "product_agent", "policy_agent", "FINISH"]
-    reply: str = Field(default="", description="Only when FINISH and no specialist answered.")
+class Task(BaseModel):
+    agent: Literal["order_agent", "product_agent", "policy_agent"]
+    request: str = Field(description="Self-contained instruction for this specialist only.")
+
+
+class Plan(BaseModel):
+    tasks: list[Task] = Field(default_factory=list)
+    reply: str = Field(default="", description="Only when tasks is empty.")
 
 
 class State(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
-    next: str
-    hops: int
+    tasks: list[dict]  # remaining sub-tasks for this turn, consumed front to back
+
+
+def _split_turn(messages: list[AnyMessage]) -> tuple[list[AnyMessage], list[AnyMessage]]:
+    """(history before the latest user message, specialist answers given so far this turn)."""
+    last = max(i for i, m in enumerate(messages) if isinstance(m, HumanMessage))
+    return messages[:last], messages[last + 1:]
 
 
 def get_llm() -> ChatOllama:
@@ -62,17 +85,15 @@ def get_llm() -> ChatOllama:
 
 def build_graph(checkpointer=None):
     llm = get_llm()
-    router = llm.with_structured_output(Route)
+    planner = llm.with_structured_output(Plan)
 
     def supervisor(state: State) -> dict:
-        if state.get("hops", 0) >= MAX_HOPS:
-            return {"next": "FINISH"}
-        # Trailing human turn: models route more reliably when the prompt ends on a user message.
-        route = router.invoke([SystemMessage(SUPERVISOR_PROMPT), *state["messages"],
-                               HumanMessage("Which specialist next, or FINISH?")])
-        update = {"next": route.next}
-        if route.next == "FINISH" and route.reply and isinstance(state["messages"][-1], HumanMessage):
-            update["messages"] = [AIMessage(route.reply, name="supervisor")]
+        # Trailing human turn: models plan more reliably when the prompt ends on a user message.
+        plan = planner.invoke([SystemMessage(SUPERVISOR_PROMPT), *state["messages"],
+                               HumanMessage("Plan the sub-tasks for my latest message.")])
+        update = {"tasks": [t.model_dump() for t in plan.tasks[:MAX_TASKS]]}
+        if not plan.tasks:
+            update["messages"] = [AIMessage(plan.reply or "How can I help you with your order?", name="supervisor")]
         return update
 
     def make_node(name: str):
@@ -80,33 +101,42 @@ def build_graph(checkpointer=None):
         agent = create_agent(llm, tools, system_prompt=prompt, name=name)
 
         def node(state: State) -> dict:
-            result = agent.invoke({"messages": state["messages"]})
-            answer = result["messages"][-1]
+            task, *rest = state["tasks"]
+            history, done = _split_turn(state["messages"])
+            request = task["request"]
+            if done:  # let later tasks use earlier results, e.g. a customer_id found by another specialist
+                earlier = "\n".join(f"- {m.name}: {m.text}" for m in done)
+                request += f"\n\nResults from other specialists so far:\n{earlier}"
+            # The specialist sees only its own sub-request, so it can't answer parts that belong to others.
+            result = agent.invoke({"messages": [*history, HumanMessage(request)]})
             # Keep only the specialist's final answer in shared history; tool traces stay in the subgraph stream.
-            return {"messages": [AIMessage(answer.text, name=name)], "hops": state.get("hops", 0) + 1}
+            return {"messages": [AIMessage(result["messages"][-1].text, name=name)], "tasks": rest}
 
         return node
+
+    def next_step(state: State) -> str:
+        return state["tasks"][0]["agent"] if state["tasks"] else END
 
     graph = StateGraph(State)
     graph.add_node("supervisor", supervisor)
     for name in AGENTS:
         graph.add_node(name, make_node(name))
-        graph.add_edge(name, "supervisor")
+        graph.add_conditional_edges(name, next_step, [*AGENTS, END])
     graph.add_edge(START, "supervisor")
-    graph.add_conditional_edges("supervisor", lambda s: END if s["next"] == "FINISH" else s["next"], [*AGENTS, END])
+    graph.add_conditional_edges("supervisor", next_step, [*AGENTS, END])
     return graph.compile(checkpointer=checkpointer if checkpointer is not None else MemorySaver())
 
 
 def run_turn(graph, text: str, thread_id: str):
-    """Run one user turn, yielding trace events: route decisions, specialist tool calls/results, replies."""
+    """Run one user turn, yielding trace events: the plan, specialist tool calls/results, replies."""
     config = {"configurable": {"thread_id": thread_id}}
     # subgraphs=True also streams the specialists' internal tool calls: the trajectory evals will grade.
-    for namespace, update in graph.stream({"messages": [("user", text)], "hops": 0}, config,
+    for namespace, update in graph.stream({"messages": [("user", text)]}, config,
                                           stream_mode="updates", subgraphs=True):
         agent = namespace[0].split(":")[0] if namespace else None
         for node, data in update.items():
             if not namespace and node == "supervisor":
-                yield {"type": "route", "next": data["next"]}
+                yield {"type": "plan", "tasks": data["tasks"]}
             for msg in (data or {}).get("messages", []):
                 if agent:
                     for call in getattr(msg, "tool_calls", None) or []:

@@ -199,11 +199,15 @@ function addTrace(events) {
   const d = document.createElement("details");
   d.className = "trace";
   const tools = steps.filter((e) => e.type === "tool_call").length;
-  d.innerHTML = `<summary>trace: ${steps.filter((e) => e.type === "route").length} routes, ${tools} tool calls</summary><ol></ol>`;
+  const tasks = steps.find((e) => e.type === "plan")?.tasks.length ?? 0;
+  d.innerHTML = `<summary>trace: ${tasks} planned tasks, ${tools} tool calls</summary><ol></ol>`;
   for (const e of steps) {
     const li = document.createElement("li");
     const code = document.createElement("code");
-    if (e.type === "route") li.textContent = `supervisor → ${e.next}`;
+    if (e.type === "plan") {
+      li.textContent = e.tasks.length ? "supervisor plan:" : "supervisor plan: no tasks, replies directly";
+      code.textContent = e.tasks.map((t, i) => `\n${i + 1}. ${t.agent}: ${t.request}`).join("");
+    }
     else if (e.type === "tool_call") { li.textContent = `${e.agent} calls ${e.name} `; code.textContent = JSON.stringify(e.args); }
     else { li.textContent = `${e.name} returned `; code.textContent = e.content.length > 400 ? e.content.slice(0, 400) + "…" : e.content; }
     li.append(code);

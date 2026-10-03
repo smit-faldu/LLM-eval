@@ -4,7 +4,7 @@ from typing import Annotated, Literal, TypedDict
 
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_ollama import ChatOllama
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -53,8 +53,9 @@ class State(TypedDict):
     hops: int
 
 
-def get_llm() -> ChatGoogleGenerativeAI:
-    return ChatGoogleGenerativeAI(model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"), temperature=0)
+def get_llm() -> ChatOllama:
+    # reasoning=False turns off qwen3's <think> output: faster, and keeps it out of answers.
+    return ChatOllama(model=os.getenv("OLLAMA_MODEL", "qwen3:4b"), temperature=0, num_ctx=8192, reasoning=False)
 
 
 def build_graph(checkpointer=None):
@@ -64,7 +65,7 @@ def build_graph(checkpointer=None):
     def supervisor(state: State) -> dict:
         if state.get("hops", 0) >= MAX_HOPS:
             return {"next": "FINISH"}
-        # Trailing human turn: Gemini expects the conversation to end on a user message.
+        # Trailing human turn: models route more reliably when the prompt ends on a user message.
         route = router.invoke([SystemMessage(SUPERVISOR_PROMPT), *state["messages"],
                                HumanMessage("Which specialist next, or FINISH?")])
         update = {"next": route.next}

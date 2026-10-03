@@ -1,4 +1,5 @@
 """Agent tools. Business rules live here, not in prompts, so evals can check the agent can't bypass them."""
+import os
 from datetime import date, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -6,7 +7,7 @@ from pathlib import Path
 from langchain_core.documents import Document
 from langchain_core.tools import tool
 from langchain_core.vectorstores import InMemoryVectorStore
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_ollama import OllamaEmbeddings
 
 from shop.db import get_conn
 
@@ -126,7 +127,7 @@ def _policy_store() -> InMemoryVectorStore:
         for section in text.split("# ")
         if section.strip()
     ]
-    return InMemoryVectorStore.from_documents(docs, GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001"))
+    return InMemoryVectorStore.from_documents(docs, OllamaEmbeddings(model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")))
 
 
 @tool

@@ -1,6 +1,7 @@
 """Offline check of tool business rules (no LLM calls). Run: uv run python test_smoke.py"""
 from shop.db import init_db
-from shop.tools import cancel_order, check_stock, get_order, issue_refund, list_customer_orders, search_products
+from shop.tools import (cancel_order, check_stock, create_support_ticket, get_customer, get_order, get_product_reviews,
+                        issue_refund, list_customer_orders, list_customer_tickets, search_products)
 
 init_db()
 
@@ -21,6 +22,14 @@ assert "only delivered" in issue_refund.invoke({"order_id": 1010, "reason": "x"}
 
 assert [p["id"] for p in search_products.invoke({"query": "wireless headphones"})] == [101]
 assert "out of stock" in check_stock.invoke({"product_id": 102})
+
+assert get_customer.invoke({"email": "alice@example.com"})["tier"] == "gold"
+assert "Invalid category" in create_support_ticket.invoke({"category": "refund", "description": "x", "order_id": 1013})
+assert "Need an order_id" in create_support_ticket.invoke({"category": "other", "description": "x"})
+assert "opened" in create_support_ticket.invoke({"category": "damaged", "description": "cracked", "order_id": 1015})
+assert [t["category"] for t in list_customer_tickets.invoke({"email": "hana@example.com"})] == ["damaged"]
+assert len(search_products.invoke({"query": "lumo"})) == 6  # brand search
+assert get_product_reviews.invoke({"product_id": 999}).startswith("No reviews")
 
 init_db()  # leave a clean DB behind
 print("all tool rules ok")

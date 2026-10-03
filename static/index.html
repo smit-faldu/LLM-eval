@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shop Support Console</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #6b7385; --border: #e3e6ec;
+    --accent: #3b5bdb; --accent-soft: #e8edff; --user: #3b5bdb; --ok: #2b8a3e; --warn: #c2410c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151c; --panel: #1a1f29; --text: #e6e9ef; --muted: #8b93a7; --border: #2a3140;
+      --accent: #7c95ff; --accent-soft: #232c45; --user: #4c6ef5; --ok: #69db7c; --warn: #ffa94d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  header h1 { font-size: 16px; margin: 0; }
+  header .spacer { flex: 1; }
+  button { font: inherit; cursor: pointer; border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 6px; padding: 6px 12px; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: wait; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 420px; height: calc(100vh - 53px); }
+  section { display: flex; flex-direction: column; min-height: 0; }
+  #data { border-right: 1px solid var(--border); }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+  .tab { border-radius: 999px; padding: 4px 12px; }
+  .tab.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .tab .count { color: var(--muted); margin-left: 4px; font-size: 12px; }
+  .toolbar { display: flex; gap: 8px; align-items: center; padding: 8px 16px; }
+  .toolbar input { flex: 1; }
+  input, textarea { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; }
+  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .table-wrap { flex: 1; overflow: auto; padding: 0 16px 16px; }
+  table { border-collapse: collapse; width: 100%; background: var(--panel); border: 1px solid var(--border); }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { position: sticky; top: 0; background: var(--panel); font-weight: 600; cursor: pointer; user-select: none; }
+  tr:hover td { background: var(--accent-soft); }
+  td.null { color: var(--muted); font-style: italic; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: var(--accent-soft); }
+  .policies { flex: 1; overflow: auto; padding: 0 16px 16px; }
+  .policies article { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin-bottom: 10px; }
+  .policies h3 { margin: 0 0 4px; font-size: 14px; }
+  .policies p { margin: 0; }
+  #chat .log { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 92%; padding: 8px 12px; border-radius: 10px; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.user { align-self: flex-end; background: var(--user); color: #fff; }
+  .msg.bot { align-self: flex-start; background: var(--panel); border: 1px solid var(--border); }
+  .msg.bot .who { display: block; font-size: 11px; color: var(--accent); font-weight: 600; margin-bottom: 2px; }
+  .msg.error { border-color: var(--warn); color: var(--warn); }
+  details.trace { align-self: flex-start; max-width: 92%; font-size: 12px; color: var(--muted); }
+  details.trace summary { cursor: pointer; }
+  details.trace ol { margin: 6px 0 0; padding-left: 18px; }
+  details.trace li { margin-bottom: 4px; }
+  details.trace code { font-size: 11px; white-space: pre-wrap; word-break: break-word; }
+  form.composer { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); background: var(--panel); }
+  form.composer textarea { flex: 1; resize: none; height: 42px; }
+  .examples { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 10px; background: var(--panel); }
+  .examples button { font-size: 12px; padding: 3px 9px; border-radius: 999px; }
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; height: auto; }
+    #data { border-right: 0; border-bottom: 1px solid var(--border); height: 60vh; }
+    #chat { height: 80vh; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Shop Support Console</h1>
+  <span class="muted" id="thread"></span>
+  <span class="spacer"></span>
+  <button id="newChat" title="Start a new conversation thread">New chat</button>
+  <button id="reset" title="Rebuild the database from seed data">Reset DB</button>
+</header>
+<main>
+  <section id="data" aria-label="Database browser">
+    <nav class="tabs" id="tabs"></nav>
+    <div class="toolbar" id="toolbar">
+      <input id="filter" type="search" placeholder="Filter rows…" aria-label="Filter rows">
+      <span class="muted" id="rowInfo"></span>
+    </div>
+    <div class="table-wrap" id="tableWrap"></div>
+    <div class="policies" id="policies" hidden></div>
+  </section>
+  <section id="chat" aria-label="Agent chat">
+    <div class="log" id="log" aria-live="polite"></div>
+    <div class="examples" id="examples"></div>
+    <form class="composer" id="composer">
+      <textarea id="input" placeholder="Ask the support agent…" aria-label="Message"></textarea>
+      <button class="primary" id="send">Send</button>
+    </form>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const EXAMPLES = [
+  "Where is order 1003?",
+  "Cancel order 1005 and tell me the refund policy",
+  "Refund order 1001, it stopped working",
+  "Which smart-home products are in stock?",
+  "What do customers think of product 101?",
+  "I'm alice@example.com, what tier am I and what are my perks?",
+  "Order 1013 broke, open a warranty ticket",
+];
+const STATUS_COLUMNS = new Set(["status", "tier", "category"]);
+let current = null, data = null, sort = { col: null, asc: true };
+let threadId = null;
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+  return res.headers.get("content-type")?.includes("json") ? res.json() : res.text();
+}
+
+async function loadTabs() {
+  const tables = await api("/api/tables");
+  $("tabs").innerHTML = "";
+  for (const t of [...tables, { name: "policies" }]) {
+    const b = document.createElement("button");
+    b.className = "tab" + (t.name === current ? " active" : "");
+    b.innerHTML = `${t.name}${t.count !== undefined ? `<span class="count">${t.count}</span>` : ""}`;
+    b.onclick = () => show(t.name);
+    $("tabs").append(b);
+  }
+  if (!current) show(tables[0].name);
+}
+
+async function show(name) {
+  current = name;
+  [...$("tabs").children].forEach((b) => b.classList.toggle("active", b.firstChild.textContent === name));
+  const isPolicy = name === "policies";
+  $("policies").hidden = !isPolicy;
+  $("tableWrap").hidden = $("toolbar").hidden = isPolicy;
+  if (isPolicy) return renderPolicies(await api("/api/policies"));
+  data = await api(`/api/tables/${encodeURIComponent(name)}`);
+  sort = { col: null, asc: true };
+  renderTable();
+}
+
+function renderPolicies(md) {
+  $("policies").innerHTML = "";
+  for (const block of md.split(/^# /m).filter((s) => s.trim())) {
+    const [title, ...body] = block.trim().split("\n");
+    const a = document.createElement("article");
+    a.innerHTML = "<h3></h3><p></p>";
+    a.querySelector("h3").textContent = title;
+    a.querySelector("p").textContent = body.join(" ").trim();
+    $("policies").append(a);
+  }
+}
+
+function renderTable() {
+  const q = $("filter").value.toLowerCase();
+  let rows = data.rows.filter((r) => !q || r.some((v) => String(v ?? "").toLowerCase().includes(q)));
+  if (sort.col !== null) {
+    const i = sort.col, dir = sort.asc ? 1 : -1;
+    rows = [...rows].sort((a, b) => (a[i] ?? "") > (b[i] ?? "") ? dir : (a[i] ?? "") < (b[i] ?? "") ? -dir : 0);
+  }
+  const table = document.createElement("table");
+  const head = table.createTHead().insertRow();
+  data.columns.forEach((c, i) => {
+    const th = document.createElement("th");
+    th.textContent = c + (sort.col === i ? (sort.asc ? " ▲" : " ▼") : "");
+    th.onclick = () => { sort = { col: i, asc: sort.col === i ? !sort.asc : true }; renderTable(); };
+    head.append(th);
+  });
+  const body = table.createTBody();
+  for (const r of rows) {
+    const tr = body.insertRow();
+    r.forEach((v, i) => {
+      const td = tr.insertCell();
+      if (v === null) { td.textContent = "null"; td.className = "null"; }
+      else if (STATUS_COLUMNS.has(data.columns[i])) td.innerHTML = `<span class="badge"></span>`, td.firstChild.textContent = v;
+      else td.textContent = v;
+    });
+  }
+  $("tableWrap").replaceChildren(table);
+  $("rowInfo").textContent = `${rows.length} of ${data.rows.length} rows`;
+}
+
+function addMsg(cls, text, who) {
+  const div = document.createElement("div");
+  div.className = "msg " + cls;
+  if (who) { const s = document.createElement("span"); s.className = "who"; s.textContent = who; div.append(s); }
+  div.append(document.createTextNode(text));
+  $("log").append(div);
+  $("log").scrollTop = $("log").scrollHeight;
+  return div;
+}
+
+function addTrace(events) {
+  const steps = events.filter((e) => e.type !== "message");
+  if (!steps.length) return;
+  const d = document.createElement("details");
+  d.className = "trace";
+  const tools = steps.filter((e) => e.type === "tool_call").length;
+  d.innerHTML = `<summary>trace: ${steps.filter((e) => e.type === "route").length} routes, ${tools} tool calls</summary><ol></ol>`;
+  for (const e of steps) {
+    const li = document.createElement("li");
+    const code = document.createElement("code");
+    if (e.type === "route") li.textContent = `supervisor → ${e.next}`;
+    else if (e.type === "tool_call") { li.textContent = `${e.agent} calls ${e.name} `; code.textContent = JSON.stringify(e.args); }
+    else { li.textContent = `${e.name} returned `; code.textContent = e.content.length > 400 ? e.content.slice(0, 400) + "…" : e.content; }
+    li.append(code);
+    d.querySelector("ol").append(li);
+  }
+  $("log").append(d);
+}
+
+async function send(text) {
+  text = text.trim();
+  if (!text) return;
+  addMsg("user", text);
+  $("input").value = "";
+  $("send").disabled = true;
+  const pending = addMsg("bot", "Thinking…", "agent");
+  try {
+    const res = await api("/api/chat", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: text, thread_id: threadId }),
+    });
+    threadId = res.thread_id;
+    $("thread").textContent = `thread ${threadId.slice(0, 8)}`;
+    pending.remove();
+    addTrace(res.events);
+    const replies = res.events.filter((e) => e.type === "message");
+    if (!replies.length) addMsg("bot", "(no reply)", "agent");
+    replies.forEach((e) => addMsg("bot", e.content, e.agent));
+    await loadTabs();  // the agent may have written to the DB (cancel, refund, ticket)
+    if (current !== "policies") await show(current);
+  } catch (err) {
+    pending.remove();
+    addMsg("bot error", err.message, "error");
+  } finally {
+    $("send").disabled = false;
+    $("input").focus();
+  }
+}
+
+$("composer").onsubmit = (e) => { e.preventDefault(); send($("input").value); };
+$("input").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send($("input").value); } };
+$("filter").oninput = renderTable;
+$("newChat").onclick = () => { threadId = null; $("log").innerHTML = ""; $("thread").textContent = ""; };
+$("reset").onclick = async () => {
+  await api("/api/reset", { method: "POST" });
+  await loadTabs();
+  await show(current);
+};
+for (const ex of EXAMPLES) {
+  const b = document.createElement("button");
+  b.type = "button"; b.textContent = ex; b.onclick = () => send(ex);
+  $("examples").append(b);
+}
+loadTabs();
+</script>
+</body>
+</html>

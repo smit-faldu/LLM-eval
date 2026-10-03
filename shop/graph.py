@@ -17,13 +17,13 @@ AGENTS = ("order_agent", "product_agent", "policy_agent")
 
 SPECIALISTS = {
     "order_agent": (ORDER_TOOLS, (
-        "You are the order specialist for an electronics shop. You look up orders, cancel pending orders and issue"
-        " refunds using your tools. Never invent order data. Only say an action succeeded if the tool says so;"
+        "You are the order and account specialist for an electronics shop. You look up orders and customer"
+        " profiles, cancel pending orders, issue refunds, and open or list support tickets using your tools. Never invent order data. Only say an action succeeded if the tool says so;"
         " if a tool refuses, explain why. Answer only the order-related part of the request."
     )),
     "product_agent": (PRODUCT_TOOLS, (
-        "You are the product specialist for an electronics shop. Use your tools to search the catalog and check"
-        " stock. Never invent products, prices or stock levels. Answer only the product-related part of the request."
+        "You are the product specialist for an electronics shop. Use your tools to search the catalog, check"
+        " stock and read reviews. Never invent products, prices, stock levels or ratings. Answer only the product-related part of the request."
     )),
     "policy_agent": (POLICY_TOOLS, (
         "You are the policy specialist for an electronics shop. Always call search_policy and answer only from the"
@@ -32,9 +32,11 @@ SPECIALISTS = {
 }
 
 SUPERVISOR_PROMPT = """You route customer messages for an electronics shop to specialists:
-- order_agent: order status, order history, cancellations, refunds for a specific order.
-- product_agent: product search, prices, stock availability.
-- policy_agent: general rules about returns, refunds, cancellation, shipping, warranty, payment.
+- order_agent: a specific order or customer account: order status, order history, cancellations, refunds,
+  customer profile/tier, opening or checking support tickets (warranty, damaged, shipping, billing).
+- product_agent: product search, prices, brands, stock availability, warranty length, reviews and ratings.
+- policy_agent: general rules: returns, refunds, exchanges, cancellation, shipping, late/damaged deliveries,
+  warranty terms, membership tiers, price match, payment, privacy.
 
 Look at the conversation since the latest user message. Pick the specialist for the next part of the request
 that has NOT been answered yet. A request can need several specialists in turn.
@@ -54,8 +56,8 @@ class State(TypedDict):
 
 
 def get_llm() -> ChatOllama:
-    # reasoning=False turns off qwen3's <think> output: faster, and keeps it out of answers.
-    return ChatOllama(model=os.getenv("OLLAMA_MODEL", "qwen3:4b"), temperature=0, num_ctx=8192, reasoning=False)
+    # reasoning=False turns off thinking output on models that have it: faster, and keeps it out of answers.
+    return ChatOllama(model=os.getenv("OLLAMA_MODEL", "gemma4:12b"), temperature=0, num_ctx=8192, reasoning=False)
 
 
 def build_graph(checkpointer=None):
@@ -93,3 +95,23 @@ def build_graph(checkpointer=None):
     graph.add_edge(START, "supervisor")
     graph.add_conditional_edges("supervisor", lambda s: END if s["next"] == "FINISH" else s["next"], [*AGENTS, END])
     return graph.compile(checkpointer=checkpointer if checkpointer is not None else MemorySaver())
+
+
+def run_turn(graph, text: str, thread_id: str):
+    """Run one user turn, yielding trace events: route decisions, specialist tool calls/results, replies."""
+    config = {"configurable": {"thread_id": thread_id}}
+    # subgraphs=True also streams the specialists' internal tool calls: the trajectory evals will grade.
+    for namespace, update in graph.stream({"messages": [("user", text)], "hops": 0}, config,
+                                          stream_mode="updates", subgraphs=True):
+        agent = namespace[0].split(":")[0] if namespace else None
+        for node, data in update.items():
+            if not namespace and node == "supervisor":
+                yield {"type": "route", "next": data["next"]}
+            for msg in (data or {}).get("messages", []):
+                if agent:
+                    for call in getattr(msg, "tool_calls", None) or []:
+                        yield {"type": "tool_call", "agent": agent, "name": call["name"], "args": call["args"]}
+                    if msg.type == "tool":
+                        yield {"type": "tool_result", "agent": agent, "name": msg.name, "content": msg.text}
+                else:
+                    yield {"type": "message", "agent": msg.name, "content": msg.text}

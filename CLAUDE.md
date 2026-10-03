@@ -18,6 +18,8 @@ E-commerce support agent ("electronics shop"), Python 3.14, uv.
   **do not change them**. Rest is generated with `random.Random(42)`.
 - `shop/tools.py` LangChain `@tool`s. Business rules (cancel only pending, refund only delivered ≤30 days,
   one refund per order, ticket categories) are enforced in code, not prompts, so evals can test them.
+  Refund rules live only in `_refund_blocked_reason`; `get_order` exposes `refund_eligible` so the model never
+  does date math (live eval showed gemma4 calling 31 days "within 30").
 - `shop/policies.md` policy docs; `search_policy` = InMemoryVectorStore + OllamaEmbeddings (`nomic-embed-text`).
 - `shop/graph.py` LangGraph: `supervisor` planner (structured output `Plan` of `Task`s) → runs
   `order_agent` / `product_agent` / `policy_agent` (`create_agent`) in plan order. Each specialist sees only
@@ -30,6 +32,7 @@ E-commerce support agent ("electronics shop"), Python 3.14, uv.
 ## Evals
 - `evals/dataset.jsonl` cases: `id, category, turns, expected_agents, expected_tools[{name, args?}],
   db_checks[{sql, expect}], must_include (str or list of alternatives), must_not_include`.
+  An expected_tools item can be `{"any_of": [call, ...]}` when several paths are valid.
 - `evals/graders.py` deterministic graders; `evals/harness.py` runner + report, results to `evals/results/`.
 
 ## Commands

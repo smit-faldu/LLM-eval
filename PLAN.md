@@ -11,13 +11,17 @@ Status: `[x]` done, `[~]` in progress, `[ ]` not started.
 - [x] Ollama (gemma4:12b in Colab)
 - [x] FastAPI backend + web UI with trace
 
-## Phase 0: own harness, no eval library  `[~]` built, waiting for first live run in Colab
+## Phase 0: own harness, no eval library  `[~]` baseline done, fixes applied, waiting for re-run
 **Learn:** what a test case, metric, threshold, and grader are; deterministic vs judgement; why a fixed seed matters.
 - [x] `evals/dataset.jsonl`: 39 cases across order, product, policy, multi_intent, multi_turn, safety, chitchat
 - [x] `evals/graders.py`: plan match, tool recall (gate), tool precision (info), DB state, must/must-not include
 - [x] `evals/harness.py`: reset DB per case, run turns, grade, report by category and check, save JSON
 - [x] `evals/test_evals.py`: grader unit checks + oracle check that the dataset's ground truth is right
-- [ ] First live run in Colab; read the failures together; record the baseline score here
+- [x] First live run in Colab: baseline 36/39 (see log)
+- [x] Fixes from failure analysis: refund eligibility computed in code (`refund_eligible` in get_order),
+      planner no longer adds unasked policy tasks, grader `any_of` for multiple valid paths,
+      refusal cases must not claim eligibility
+- [ ] Re-run in Colab and compare with the baseline
 
 ## Phase 1: openevals + agentevals
 **Learn:** trajectory evaluation modes, LLM-as-judge prompts, judge bias.
@@ -54,3 +58,4 @@ Status: `[x]` done, `[~]` in progress, `[ ]` not started.
 ## Results log
 | Date | Model | Suite | Score | Notes |
 |---|---|---|---|---|
+| 2026-10-03 | gemma4:12b | Phase 0 (39) | 36/39 (92%) | Baseline. Fails: refund-day-31 (model date math said 31 days was eligible), refund-ok (extra policy task, 63s), refund-already-done (valid path, dataset too strict) |

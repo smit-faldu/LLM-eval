@@ -35,31 +35,51 @@ r = grade_case({"expected_agents": ["order_agent"]}, [{"type": "plan", "tasks": 
 assert r["passed"]  # repeated agent collapses to one step
 r = grade_case({"expected_agents": [], "expected_tools": []}, [{"type": "plan", "tasks": []}], None)
 assert r["passed"]
+# any_of: refusing after get_order is as valid as trying issue_refund and being refused
+refusal = {"expected_tools": [{"any_of": [{"name": "issue_refund", "args": {"order_id": 1004}},
+                                          {"name": "get_order", "args": {"order_id": 1004}}]}],
+           "must_not_include": ["is eligible"]}
+via_lookup = [{"type": "tool_call", "agent": "order_agent", "name": "get_order", "args": {"order_id": 1004}},
+              {"type": "message", "agent": "order_agent", "content": "Order 1004 was already refunded."}]
+assert grade_case(refusal, via_lookup, None)["passed"]
+# The refund-day-31 failure from the first live run: no refund happened (DB fine), but the answer was wrong.
+wrong_claim = via_lookup[:1] + [{"type": "message", "agent": "order_agent", "content": "It is eligible for a refund."}]
+assert not grade_case(refusal, wrong_claim, None)["checks"]["must_not_include"]["passed"]
 print("graders ok")
 
 # ---------- 2. oracle check on the dataset ----------
 TOOLS = {t.name: t for t in tools.ORDER_TOOLS + tools.PRODUCT_TOOLS}
 problems = []
 cases = load_cases()
-for case in cases:
-    if "db_checks" not in case:
-        continue
-    init_db()
-    for call in case.get("expected_tools", []):
+
+
+def _run_path(case: dict, calls: list[dict]) -> list[str]:
+    for call in calls:
         if call["name"] not in TOOLS:  # search_policy needs the embedding model; it never writes anyway
             continue
-        tool = TOOLS[call["name"]]
         args = dict(call.get("args", {}))
         if call["name"] == "issue_refund":
             args.setdefault("reason", "eval")
         if call["name"] == "create_support_ticket":
             args.setdefault("description", "eval")
-        tool.invoke(args)
+        TOOLS[call["name"]].invoke(args)
     with get_conn() as conn:
         db = grade_case({"db_checks": case["db_checks"]}, [], conn)
-    if not db["passed"]:
-        problems.append(f"{case['id']}: {db['checks']['db']['detail']}")
+    return [] if db["passed"] else [f"{case['id']} via {[c['name'] for c in calls]}: {db['checks']['db']['detail']}"]
+
+
+for case in cases:
+    if "db_checks" not in case:
+        continue
+    # Every valid path (each any_of alternative) must leave the DB in the expected state.
+    width = max([len(c.get("any_of", [c])) for c in case.get("expected_tools", [])] or [1])
+    for path in range(width):
+        init_db()
+        calls = [c["any_of"][min(path, len(c["any_of"]) - 1)] if "any_of" in c else c
+                 for c in case.get("expected_tools", [])]
+        problems += _run_path(case, calls)
 init_db()
+
 assert not problems, "\n".join(problems)
 ids = [c["id"] for c in cases]
 assert len(ids) == len(set(ids)), "duplicate case ids"

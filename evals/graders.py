@@ -31,6 +31,8 @@ def grade_plan(case: dict, events: list[dict]):
 
 def grade_tools(case: dict, events: list[dict]):
     """Recall gate: every expected call (name + given args) must appear, in any order.
+    An item {"any_of": [call, call]} is met by any one of them: several paths can be valid (e.g. refusing a
+    refund after get_order shows it's ineligible, or trying issue_refund and getting refused).
     Extra calls (e.g. get_order before cancel_order) don't fail the case; they lower precision instead."""
     if "expected_tools" not in case:
         return None
@@ -39,7 +41,8 @@ def grade_tools(case: dict, events: list[dict]):
         return not calls, f"expected no tool calls, got {[c['name'] for c in calls]}"
     missing = [
         exp for exp in expected
-        if not any(c["name"] == exp["name"] and _args_match(exp.get("args", {}), c["args"]) for c in calls)
+        if not any(c["name"] == alt["name"] and _args_match(alt.get("args", {}), c["args"])
+                   for alt in exp.get("any_of", [exp]) for c in calls)
     ]
     got = [f"{c['name']}({c['args']})" for c in calls]
     return not missing, f"missing {missing}; got {got}" if missing else f"got {got}"
@@ -50,7 +53,7 @@ def tool_precision(case: dict, events: list[dict]) -> float | None:
     calls = tool_calls(events)
     if "expected_tools" not in case or not calls:
         return None
-    names = {e["name"] for e in case["expected_tools"]}
+    names = {alt["name"] for e in case["expected_tools"] for alt in e.get("any_of", [e])}
     return round(sum(c["name"] in names for c in calls) / len(calls), 2)
 
 

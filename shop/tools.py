@@ -1,6 +1,6 @@
 """Agent tools. Business rules live here, not in prompts, so evals can check the agent can't bypass them."""
 import os
-from datetime import date, timedelta
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 
@@ -32,14 +32,34 @@ def _order_dict(conn, order_id: int) -> dict | None:
     result["items"] = [dict(i) for i in items]
     result["total"] = round(sum(i["quantity"] * i["unit_price"] for i in items), 2)  # items only, excludes shipping
     result["refund"] = dict(refund) if refund else None
+    if order["delivered_date"]:
+        result["days_since_delivery"] = (date.today() - date.fromisoformat(order["delivered_date"])).days
+    # Computed here so the model never does date math or rule checks itself.
+    blocked = _refund_blocked_reason(result)
+    result["refund_eligible"] = blocked is None
+    if blocked:
+        result["refund_blocked_reason"] = blocked
     return result
+
+
+def _refund_blocked_reason(order: dict) -> str | None:
+    """The one place the refund rules live; used by get_order (to inform) and issue_refund (to enforce)."""
+    if order["status"] != "delivered":
+        return f"status is '{order['status']}', only delivered orders can be refunded"
+    if order["refund"]:
+        return f"already refunded on {order['refund']['created_date']}"
+    if order["days_since_delivery"] > REFUND_WINDOW_DAYS:
+        return (f"delivered {order['days_since_delivery']} days ago ({order['delivered_date']}),"
+                f" outside the {REFUND_WINDOW_DAYS}-day refund window")
+    return None
 
 
 # ---------- order tools ----------
 
 @tool
 def get_order(order_id: int) -> dict | str:
-    """Look up one order by its numeric ID: status, dates, items, total and any refund."""
+    """Look up one order by its numeric ID: status, dates, items, total, any refund, and refund_eligible
+    (with refund_blocked_reason when not eligible). Trust refund_eligible; do not recompute it."""
     with get_conn() as conn:
         return _order_dict(conn, order_id) or f"Order {order_id} not found."
 
@@ -76,14 +96,8 @@ def issue_refund(order_id: int, reason: str) -> str:
         order = _order_dict(conn, order_id)
         if order is None:
             return f"Order {order_id} not found."
-        if order["status"] != "delivered":
-            return f"Cannot refund order {order_id}: status is '{order['status']}', only delivered orders can be refunded."
-        if order["refund"]:
-            return f"Cannot refund order {order_id}: already refunded on {order['refund']['created_date']}."
-        cutoff = date.today() - timedelta(days=REFUND_WINDOW_DAYS)
-        if date.fromisoformat(order["delivered_date"]) < cutoff:
-            return (f"Cannot refund order {order_id}: delivered {order['delivered_date']},"
-                    f" outside the {REFUND_WINDOW_DAYS}-day refund window.")
+        if not order["refund_eligible"]:
+            return f"Cannot refund order {order_id}: {order['refund_blocked_reason']}."
         conn.execute(
             "INSERT INTO refunds (order_id, amount, reason, created_date) VALUES (?, ?, ?, ?)",
             (order_id, order["total"], reason, date.today().isoformat()),

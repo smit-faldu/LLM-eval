@@ -1,5 +1,6 @@
 """Agent tools. Business rules live here, not in prompts, so evals can check the agent can't bypass them."""
 import os
+import re
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
@@ -196,23 +197,47 @@ def get_product_reviews(product_id: int) -> dict | str:
 
 # ---------- policy tool (RAG) ----------
 
+POLICY_K = 3  # chunks returned per search; evals/phase2.py experiments with other values
+
+
+def policy_chunks(chunking: str = "section") -> list[Document]:
+    """Split policies.md into retrievable chunks, each tagged with its section for retrieval evals.
+    "section": one chunk per "# " heading, heading included (what the agent uses).
+    "sentence": one chunk per sentence, no heading.  "sentence+title": one per sentence, heading prepended."""
+    text = (Path(__file__).parent / "policies.md").read_text(encoding="utf-8")
+    docs = []
+    for block in (b.strip() for b in text.split("# ") if b.strip()):
+        title, _, body = block.partition("\n")
+        title, body = title.strip(), body.strip()
+        if chunking == "section":
+            parts = [f"{title}\n{body}"]
+        else:
+            parts = re.split(r"(?<=\.)\s+", body)
+            if chunking == "sentence+title":
+                parts = [f"{title}: {p}" for p in parts]
+        docs += [Document(page_content=p, metadata={"section": title}) for p in parts if p]
+    return docs
+
+
+def build_policy_store(chunking: str = "section", embeddings=None) -> InMemoryVectorStore:
+    embeddings = embeddings or OllamaEmbeddings(model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"))
+    return InMemoryVectorStore.from_documents(policy_chunks(chunking), embeddings)
+
+
 @lru_cache(maxsize=1)
 def _policy_store() -> InMemoryVectorStore:
-    text = (Path(__file__).parent / "policies.md").read_text(encoding="utf-8")
-    docs = [
-        Document(page_content=section.strip(), metadata={"section": section.splitlines()[0].strip()})
-        for section in text.split("# ")
-        if section.strip()
-    ]
-    return InMemoryVectorStore.from_documents(docs, OllamaEmbeddings(model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")))
+    return build_policy_store()
+
+
+def format_policy_hits(hits: list[Document]) -> str:
+    return "\n\n".join(f"[{d.metadata['section']}]\n{d.page_content}" for d in hits)
 
 
 @tool
 def search_policy(query: str) -> str:
     """Search store policy documents: returns, refunds, exchanges, cancellation, shipping, late or damaged deliveries,
     warranty, membership tiers, price match, payment, stock, support tickets, privacy."""
-    hits = _policy_store().similarity_search(query, k=3)
-    return "\n\n".join(f"[{d.metadata['section']}]\n{d.page_content}" for d in hits)
+    return format_policy_hits(_policy_store().similarity_search(query, k=POLICY_K))
 
 
 ORDER_TOOLS = [get_order, list_customer_orders, cancel_order, issue_refund,

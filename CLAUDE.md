@@ -41,6 +41,11 @@ E-commerce support agent ("electronics shop"), Python 3.14, uv.
   Arg matching uses per-case key-list overrides, never a global `tool_args_match_mode="superset"`: agentevals
   swaps outputs/reference in subset/unordered modes, which turns superset into subset.
   References hold must-have facts only; extra detail makes the correctness judge fail good answers.
+- `evals/phase2.py` RAGAS 0.4 (`ragas.metrics.collections`, async `ascore`). LLM/embeddings via `llm_factory` /
+  `embedding_factory` on `AsyncOpenAI(base_url=OLLAMA_HOST/v1)`. Subcommands retrieval | rag | agent | generate.
+  `evals/rag_dataset.jsonl`: `id, question, reference, reference_sections` (section titles from policies.md).
+  ragas 0.4.3 needs `langchain-community<0.4.2` (0.4.2 dropped the vertexai module ragas imports).
+  Tool-call metrics project actual args to the dataset's arg keys first (same rule as Phase 1).
 
 ## Commands
 ```
@@ -48,8 +53,10 @@ uv run python test_smoke.py          # tool business rules, offline
 uv run python test_graph.py          # planner/specialist wiring with fake LLM, offline
 uv run python -m evals.test_evals    # graders + dataset ground-truth oracle, offline
 uv run python -m evals.test_phase1   # Phase 1 wiring with fake judge, offline
+uv run python -m evals.test_phase2   # Phase 2 wiring + RAG dataset oracle, offline
 uv run python -m evals.harness [--only TEXT]   # real eval run, needs Ollama
 uv run python -m evals.phase1 [--from FILE] [--only TEXT]   # Phase 1 judges, needs Ollama
+uv run python -m evals.phase2 retrieval|rag|agent|generate     # Phase 2 RAGAS (agent --no-llm runs offline)
 uv run main.py                       # CLI chat
 uv run uvicorn app:app --reload      # web UI on :8000
 ```

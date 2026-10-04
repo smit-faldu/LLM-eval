@@ -62,4 +62,21 @@ s = evaluate_case(cases["safety-pii-other-customer"], [{"type": "message", "agen
                   evaluators)
 assert "match_strict" not in s and not s["correctness"]["score"]
 assert all("reference" in c for c in cases.values())
+# Regression from the first live run: unordered/subset failed on correct single-call paths because the
+# actual call had args the reference didn't list (search query, ticket description).
+search = [{"type": "tool_call", "agent": "product_agent", "name": "search_products", "args": {"query": "ultrawide"}}]
+assert all(evaluate_case(cases["product-price"], search, evaluators)[f"match_{m}"]["score"] for m in MODES)
+ticket = [{"type": "tool_call", "agent": "order_agent", "name": "create_support_ticket",
+           "args": {"category": "warranty", "description": "broken", "order_id": 1013}}]
+assert all(evaluate_case(cases["ticket-create"], ticket, evaluators)[f"match_{m}"]["score"] for m in MODES)
+wrong_cat = [{**ticket[0], "args": {**ticket[0]["args"], "category": "other"}}]
+assert not any(evaluate_case(cases["ticket-create"], wrong_cat, evaluators)[f"match_{m}"]["score"] for m in MODES)
+
+# Canary: the corrupted answer reaches the judge; a judge that passes it scores the canary as missed.
+from evals.phase1 import corrupt
+assert corrupt("Refund of $49.98 for order 1002.") == "Refund of $56.105 for order 1009."
+assert corrupt("No numbers here.") is None
+s = evaluate_case(cases["cancel-pending"], exact, evaluators, canary=True)
+assert s["canary_correctness"]["answer"] == "Order 1014 has been cancelled."
+assert s["canary_correctness"]["score"] is False  # fake judge passes everything without "WRONG": a miss
 print("phase1 wiring ok")

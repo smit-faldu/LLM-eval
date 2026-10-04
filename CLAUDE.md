@@ -37,7 +37,10 @@ E-commerce support agent ("electronics shop"), Python 3.14, uv.
 - `evals/graders.py` deterministic graders; `evals/harness.py` runner + report, results to `evals/results/`.
 - `evals/phase1.py` agentevals trajectory match (4 modes, on a calls-only trajectory) + trajectory judge +
   openevals correctness/groundedness judges. Judge = `JUDGE_MODEL` (default `qwen3:8b`), must differ from agent.
-  `--from <phase0 json>` reuses saved traces.
+  `--from <phase0 json>` reuses saved traces. `--canary` judges number-corrupted answers (judge must FAIL them).
+  Arg matching uses per-case key-list overrides, never a global `tool_args_match_mode="superset"`: agentevals
+  swaps outputs/reference in subset/unordered modes, which turns superset into subset.
+  References hold must-have facts only; extra detail makes the correctness judge fail good answers.
 
 ## Commands
 ```

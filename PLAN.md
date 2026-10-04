@@ -29,7 +29,11 @@ Status: `[x]` done, `[~]` in progress, `[ ]` not started.
 - [x] `evals/phase1.py`: trajectory match in all 4 modes, trajectory LLM judge (reference-free),
       CORRECTNESS judge (vs reference), custom GROUNDEDNESS rubric (vs tool outputs), code-vs-judge agreement table
 - [x] `evals/test_phase1.py`: offline wiring test with a fake judge
-- [ ] Live run in Colab (agent gemma4:12b, judge qwen3:8b); read judge disagreements together
+- [x] Live run 1 (agent and judge both gemma4:12b): found a matcher bug (agentevals swaps sides in
+      subset/unordered, so tool_args "superset" became "subset") -> per-case arg-key overrides; 3 over-specified
+      references trimmed to must-have facts; judge hallucinated a missing "$59.99" that was present
+- [x] `--canary`: judge also grades a number-corrupted copy of each answer; must FAIL it (tests the judge)
+- [ ] Live run 2 with a different judge (qwen3:8b) and `--canary`; compare judge leniency vs run 1
 
 ## Phase 2: RAGAS on the policy agent
 **Learn:** retrieval vs generation failures, RAG metrics, experiments.
@@ -62,3 +66,4 @@ Status: `[x]` done, `[~]` in progress, `[ ]` not started.
 |---|---|---|---|---|
 | 2026-10-03 | gemma4:12b | Phase 0 (39) | 36/39 (92%) | Baseline. Fails: refund-day-31 (model date math said 31 days was eligible), refund-ok (extra policy task, 63s), refund-already-done (valid path, dataset too strict) |
 | 2026-10-03 | gemma4:12b | Phase 0 (39) | 39/39 (100%) | After fixes (refund_eligible, planner rules, any_of). JSON not saved |
+| 2026-10-04 | gemma4:12b (judge gemma4:12b) | Phase 1 (39) | strict 34/37, superset 37/37, traj judge 39/39, correctness 36/39, groundedness 39/39 | Same-model judge. unordered/subset 16/37 was a matcher bug (fixed, now 34/37). 3 correctness fails = judge too strict/hallucinated, not agent |

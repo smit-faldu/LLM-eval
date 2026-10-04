@@ -8,10 +8,12 @@ Three kinds of evaluator, from cheapest to most judgement-based:
 
 Run:  uv run python -m evals.phase1 --from evals/results/<phase0 file>.json   # reuse Phase 0 traces, judges only
       uv run python -m evals.phase1 [--only TEXT]                            # run the agent too
+      add --canary to also check the judge catches deliberately wrong answers
 Judge model: JUDGE_MODEL (default qwen3:8b). Keep it different from OLLAMA_MODEL to avoid self-preference bias.
 """
 import argparse
 import itertools
+import re
 import json
 import os
 from collections import defaultdict
@@ -100,19 +102,36 @@ def reference_trajectories(question: str, case: dict) -> list[list[dict]]:
     return refs
 
 
+def match_evaluators(case: dict) -> dict:
+    """Per-case matchers. Args are compared only on the keys the dataset specifies, per tool ("ignore" when it
+    specifies none, e.g. search_products). A plain tool_args_match_mode="superset" looks right but breaks the
+    subset/unordered modes: agentevals swaps outputs and reference there, so "superset" silently becomes
+    "subset" and an extra arg like a ticket `description` fails the match. Key lists compare both ways equally."""
+    keys = defaultdict(set)
+    for item in case["expected_tools"]:
+        for alt in item.get("any_of", [item]):
+            keys[alt["name"]] |= set(alt.get("args", {}))
+    overrides = {name: sorted(k) if k else "ignore" for name, k in keys.items()}
+    return {m: create_trajectory_match_evaluator(trajectory_match_mode=m, tool_args_match_mode="exact",
+                                                 tool_args_match_overrides=overrides) for m in MODES}
+
+
+def corrupt(answer: str) -> str | None:
+    """Canary for the judges: same answer with every number changed (49.98 -> 56.98, 1003 -> 1010).
+    A judge that still passes it is not reading the facts. None when the answer has no numbers."""
+    bumped = re.sub(r"\d+", lambda m: str(int(m.group()) + 7), answer)
+    return bumped if bumped != answer else None
+
+
 def build_evaluators(judge):
-    # tool_args_match_mode="superset": actual args must contain the expected ones (extra args such as a
-    # refund `reason` are fine). Expected tools with no args (search_products) match on name only.
-    match = {m: create_trajectory_match_evaluator(trajectory_match_mode=m, tool_args_match_mode="superset")
-             for m in MODES}
     trajectory_judge = create_trajectory_llm_as_judge(prompt=TRAJECTORY_ACCURACY_PROMPT, judge=judge)
     correctness = create_llm_as_judge(prompt=CORRECTNESS_PROMPT, judge=judge, feedback_key="correctness")
     groundedness = create_llm_as_judge(prompt=GROUNDEDNESS_PROMPT, judge=judge, feedback_key="groundedness")
-    return match, trajectory_judge, correctness, groundedness
+    return trajectory_judge, correctness, groundedness
 
 
-def evaluate_case(case: dict, events: list[dict], evaluators) -> dict:
-    match, trajectory_judge, correctness, groundedness = evaluators
+def evaluate_case(case: dict, events: list[dict], evaluators, canary: bool = False) -> dict:
+    trajectory_judge, correctness, groundedness = evaluators
     question = "\n".join(case["turns"])  # multi-turn: earlier turns are context for the graded last turn
     trajectory = to_trajectory(question, events)
     answer = answer_text(events)
@@ -121,7 +140,7 @@ def evaluate_case(case: dict, events: list[dict], evaluators) -> dict:
 
     if "expected_tools" in case:
         refs, actual = reference_trajectories(question, case), calls_only(trajectory)
-        for mode, ev in match.items():
+        for mode, ev in match_evaluators(case).items():
             scores[f"match_{mode}"] = {"score": any(ev(outputs=actual, reference_outputs=r)["score"] for r in refs)}
 
     for name, result in (
@@ -130,6 +149,14 @@ def evaluate_case(case: dict, events: list[dict], evaluators) -> dict:
         ("groundedness", groundedness(inputs=question, outputs=answer, context=tool_outputs or "(no tool calls)")),
     ):
         scores[name] = {"score": bool(result["score"]), "reason": result.get("comment")}
+
+    # Judge sanity check: a known-wrong answer must FAIL. A pass here is a judge false positive.
+    if canary and (bad := corrupt(answer)):
+        for name, result in (
+            ("canary_correctness", correctness(inputs=question, outputs=bad, reference_outputs=case["reference"])),
+            ("canary_groundedness", groundedness(inputs=question, outputs=bad, context=tool_outputs or "(no tool calls)")),
+        ):
+            scores[name] = {"score": not result["score"], "reason": result.get("comment"), "answer": bad}
     return scores
 
 
@@ -148,6 +175,14 @@ def print_report(rows: list[dict]) -> None:
         if vals:
             print(f"  {k:<18} {sum(vals)}/{len(vals)}")
 
+    canaries = [r["scores"][k] for r in rows for k in ("canary_correctness", "canary_groundedness") if k in r["scores"]]
+    if canaries:
+        print(f"  (canary = judge FAILED a corrupted answer; {sum(c['score'] for c in canaries)}/{len(canaries)} caught)")
+        for r in rows:
+            for k in ("canary_correctness", "canary_groundedness"):
+                if k in r["scores"] and not r["scores"][k]["score"]:
+                    print(f"  judge MISSED corruption: {r['id']} {k}: {r['scores'][k]['answer'][:120]!r}")
+
     # Agreement between the code graders (Phase 0) and the judge: where they disagree, read both. One is wrong.
     print("\nPhase 0 (code) vs correctness judge:")
     table = defaultdict(list)
@@ -162,6 +197,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--from", dest="source", help="Phase 0 results JSON to reuse instead of running the agent")
     parser.add_argument("--only", help="cases whose id or category contains this text")
+    parser.add_argument("--canary", action="store_true",
+                        help="also judge a number-corrupted copy of each answer, to test the judge itself")
     args = parser.parse_args()
 
     cases = {c["id"]: c for c in load_cases()
@@ -192,7 +229,7 @@ def main():
         if run.get("error"):
             print(f"      skipped, agent error: {run['error']}")
             continue
-        scores = evaluate_case(cases[run["id"]], run["events"], evaluators)
+        scores = evaluate_case(cases[run["id"]], run["events"], evaluators, canary=args.canary)
         rows.append({"id": run["id"], "phase0_passed": run["passed"], "scores": scores})
 
     print()

@@ -33,14 +33,20 @@ E-commerce support agent ("electronics shop"), Python 3.14, uv.
 - `evals/dataset.jsonl` cases: `id, category, turns, expected_agents, expected_tools[{name, args?}],
   db_checks[{sql, expect}], must_include (str or list of alternatives), must_not_include`.
   An expected_tools item can be `{"any_of": [call, ...]}` when several paths are valid.
+  Every case has a `reference` answer (used by LLM judges); keep it consistent with the seed DB.
 - `evals/graders.py` deterministic graders; `evals/harness.py` runner + report, results to `evals/results/`.
+- `evals/phase1.py` agentevals trajectory match (4 modes, on a calls-only trajectory) + trajectory judge +
+  openevals correctness/groundedness judges. Judge = `JUDGE_MODEL` (default `qwen3:8b`), must differ from agent.
+  `--from <phase0 json>` reuses saved traces.
 
 ## Commands
 ```
 uv run python test_smoke.py          # tool business rules, offline
 uv run python test_graph.py          # planner/specialist wiring with fake LLM, offline
 uv run python -m evals.test_evals    # graders + dataset ground-truth oracle, offline
+uv run python -m evals.test_phase1   # Phase 1 wiring with fake judge, offline
 uv run python -m evals.harness [--only TEXT]   # real eval run, needs Ollama
+uv run python -m evals.phase1 [--from FILE] [--only TEXT]   # Phase 1 judges, needs Ollama
 uv run main.py                       # CLI chat
 uv run uvicorn app:app --reload      # web UI on :8000
 ```

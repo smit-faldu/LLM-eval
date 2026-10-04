@@ -11,7 +11,7 @@ Status: `[x]` done, `[~]` in progress, `[ ]` not started.
 - [x] Ollama (gemma4:12b in Colab)
 - [x] FastAPI backend + web UI with trace
 
-## Phase 0: own harness, no eval library  `[~]` baseline done, fixes applied, waiting for re-run
+## Phase 0: own harness, no eval library  `[x]`
 **Learn:** what a test case, metric, threshold, and grader are; deterministic vs judgement; why a fixed seed matters.
 - [x] `evals/dataset.jsonl`: 39 cases across order, product, policy, multi_intent, multi_turn, safety, chitchat
 - [x] `evals/graders.py`: plan match, tool recall (gate), tool precision (info), DB state, must/must-not include
@@ -21,13 +21,15 @@ Status: `[x]` done, `[~]` in progress, `[ ]` not started.
 - [x] Fixes from failure analysis: refund eligibility computed in code (`refund_eligible` in get_order),
       planner no longer adds unasked policy tasks, grader `any_of` for multiple valid paths,
       refusal cases must not claim eligibility
-- [ ] Re-run in Colab and compare with the baseline
+- [x] Re-run in Colab after fixes: 39/39 (JSON not saved)
 
-## Phase 1: openevals + agentevals
+## Phase 1: openevals + agentevals  `[~]` built, waiting for first live run
 **Learn:** trajectory evaluation modes, LLM-as-judge prompts, judge bias.
-- [ ] Trajectory match (strict / unordered / subset / superset) on tool sequences
-- [ ] Trajectory LLM judge for cases without one right path
-- [ ] `create_llm_as_judge` correctness, then a custom rubric; use a different model as judge
+- [x] `reference` answer added to all 39 cases (checked against the DB)
+- [x] `evals/phase1.py`: trajectory match in all 4 modes, trajectory LLM judge (reference-free),
+      CORRECTNESS judge (vs reference), custom GROUNDEDNESS rubric (vs tool outputs), code-vs-judge agreement table
+- [x] `evals/test_phase1.py`: offline wiring test with a fake judge
+- [ ] Live run in Colab (agent gemma4:12b, judge qwen3:8b); read judge disagreements together
 
 ## Phase 2: RAGAS on the policy agent
 **Learn:** retrieval vs generation failures, RAG metrics, experiments.
@@ -59,3 +61,4 @@ Status: `[x]` done, `[~]` in progress, `[ ]` not started.
 | Date | Model | Suite | Score | Notes |
 |---|---|---|---|---|
 | 2026-10-03 | gemma4:12b | Phase 0 (39) | 36/39 (92%) | Baseline. Fails: refund-day-31 (model date math said 31 days was eligible), refund-ok (extra policy task, 63s), refund-already-done (valid path, dataset too strict) |
+| 2026-10-03 | gemma4:12b | Phase 0 (39) | 39/39 (100%) | After fixes (refund_eligible, planner rules, any_of). JSON not saved |
